@@ -17,46 +17,41 @@ import argparse
 import numpy as np
 from pathlib import Path
 
-# ─── CONFIGURACIÓN ─────────────────────────────────────────────────────────────
 MODEL_PATH = Path(__file__).parent / "vulnerability_model.pkl"
 METADATA_PATH = Path(__file__).parent / "model_metadata.json"
 
 DANGEROUS_FUNCTIONS = [
-    'eval', 'exec', 'subprocess', 'os.system', 'os.popen',
-    'pickle.loads', 'yaml.load', 'input', '__import__',
-    'compile', 'execfile', 'open', 'shlex', 'popen',
-    'ctypes', 'cffi', 'socket', 'marshal'
+    'eval', 'exec', 'os.system', 'os.popen',
+    'pickle.loads', 'yaml.load', '__import__',
+    'compile', 'execfile', 'ctypes', 'marshal'
 ]
 
 SANITIZATION_PATTERNS = [
-    'escape', 'sanitize', 'validate', 'strip', 'encode',
-    'bleach', 'html.escape', 'urllib.parse.quote', 'parameterized',
-    'prepared', 'shlex.quote', 'hashlib', 'hmac', 'secrets'
+    'escape', 'sanitize', 'validate', 'bleach',
+    'html.escape', 'urllib.parse.quote', 'shlex.quote',
+    'hashlib', 'hmac', 'secrets', 'bcrypt', 'argon2'
 ]
 
 SQL_INJECTION_PATTERNS = [
-    r'execute\s*\(.*%.*\)',
-    r'execute\s*\(.*format.*\)',
-    r'execute\s*\(.*\+.*\)',
-    r'SELECT.*\+',
-    r'INSERT.*\+',
-    r'UPDATE.*\+',
-    r'DELETE.*\+',
-    r'f["\'].*SELECT',
+    r'execute\s*\(\s*["\'].*\+',
+    r'execute\s*\(\s*f["\']',
+    r'SELECT.*\+\s*\w',
+    r'INSERT.*\+\s*\w',
+    r'UPDATE.*\+\s*\w',
+    r'DELETE.*\+\s*\w',
 ]
 
 COMMAND_INJECTION_PATTERNS = [
     r'os\.system\s*\(',
-    r'subprocess\.call\s*\(.*shell=True',
-    r'subprocess\.Popen\s*\(.*shell=True',
+    r'subprocess\.call\s*\(.*shell\s*=\s*True',
+    r'subprocess\.Popen\s*\(.*shell\s*=\s*True',
     r'os\.popen\s*\(',
 ]
 
 XSS_PATTERNS = [
-    r'innerHTML\s*=',
+    r'innerHTML\s*=\s*\w',
     r'document\.write\s*\(',
-    r'eval\s*\(',
-    r'\.html\s*\(.*req\.',
+    r'render_template_string\s*\(.*\+',
 ]
 
 VULN_TYPES = {
@@ -70,7 +65,7 @@ VULN_TYPES = {
 }
 
 
-def get_ast_depth(code: str) -> int:
+def get_ast_depth(code):
     try:
         tree = ast.parse(code)
         def depth(node):
@@ -85,20 +80,21 @@ def get_ast_depth(code: str) -> int:
             return 0
 
 
-def extract_features(code: str) -> dict:
+def extract_features(code):
     code_lower = code.lower()
     lines = code.split('\n')
-
     f = {}
+
     f['num_lines'] = len(lines)
     f['num_tokens'] = len(code.split())
-    f['avg_line_length'] = float(np.mean([len(l) for l in lines])) if lines else 0
+    f['avg_line_length'] = float(np.mean([len(l) for l in lines])) if lines else 0.0
     f['max_line_length'] = max((len(l) for l in lines), default=0)
     f['num_comments'] = sum(1 for l in lines if l.strip().startswith('#') or '//' in l)
     f['ast_depth'] = get_ast_depth(code)
 
     for fn in DANGEROUS_FUNCTIONS:
-        f[f'uses_{fn.replace(".", "_")}'] = int(fn in code_lower)
+        pattern = r'\b' + re.escape(fn.split('.')[-1]) + r'\s*\('
+        f[f'uses_{fn.replace(".", "_")}'] = int(bool(re.search(pattern, code_lower)))
     f['dangerous_fn_count'] = sum(f[f'uses_{fn.replace(".", "_")}'] for fn in DANGEROUS_FUNCTIONS)
 
     for s in SANITIZATION_PATTERNS:
@@ -111,27 +107,29 @@ def extract_features(code: str) -> dict:
     f['xss_patterns'] = sum(1 for p in XSS_PATTERNS if re.search(p, code, re.IGNORECASE))
 
     secret_patterns = [
-        r'password\s*=\s*["\'][^"\']+["\']',
-        r'secret\s*=\s*["\'][^"\']+["\']',
-        r'api_key\s*=\s*["\'][^"\']+["\']',
-        r'token\s*=\s*["\'][^"\']+["\']',
+        r'password\s*=\s*["\'][^"\']{4,}["\']',
+        r'secret\s*=\s*["\'][^"\']{4,}["\']',
+        r'api_key\s*=\s*["\'][^"\']{4,}["\']',
+        r'token\s*=\s*["\'][^"\']{4,}["\']',
     ]
     f['hardcoded_secrets'] = sum(1 for p in secret_patterns if re.search(p, code, re.IGNORECASE))
 
     f['has_try_except'] = int('try:' in code or 'try {' in code)
-    f['bare_except'] = int(re.search(r'except\s*:', code) is not None)
+    f['bare_except'] = int(bool(re.search(r'except\s*:', code)))
     f['has_finally'] = int('finally:' in code or 'finally {' in code)
     f['uses_env_vars'] = int('os.environ' in code or 'process.env' in code or 'getenv' in code)
+    f['uses_parameterized'] = int(bool(re.search(r'execute\s*\([^)]+,\s*[\(\[]', code)))
+    f['uses_orm'] = int('filter_by' in code or 'filter(' in code or '.query.' in code)
+    f['uses_prepared'] = int('prepare(' in code_lower or ':id' in code or '= ?' in code or 'text(' in code)
+    f['is_safe_sql'] = int(f['uses_parameterized'] > 0 or f['uses_orm'] > 0 or f['uses_prepared'] > 0)
 
-    total_danger = (f['sql_injection_patterns'] + f['cmd_injection_patterns'] +
-                    f['xss_patterns'] + f['dangerous_fn_count'])
-    f['danger_sanitize_ratio'] = total_danger / max(f['sanitization_count'] + 1, 1)
+    total = f['sql_injection_patterns'] + f['cmd_injection_patterns'] + f['xss_patterns'] + f['dangerous_fn_count']
+    f['danger_sanitize_ratio'] = total / max(f['sanitization_count'] + 1, 1)
 
     return f
 
 
-def detect_vulnerability_types(code: str) -> list[str]:
-    """Identifica los tipos de vulnerabilidades presentes."""
+def detect_vulnerability_types(code):
     found = []
     code_lower = code.lower()
 
@@ -141,9 +139,9 @@ def detect_vulnerability_types(code: str) -> list[str]:
         found.append(VULN_TYPES['cmd_injection'])
     if any(re.search(p, code, re.IGNORECASE) for p in XSS_PATTERNS):
         found.append(VULN_TYPES['xss'])
-    if re.search(r'(password|secret|api_key|token)\s*=\s*["\'][^"\']+["\']', code, re.IGNORECASE):
+    if re.search(r'(password|secret|api_key|token)\s*=\s*["\'][^"\']{4,}["\']', code, re.IGNORECASE):
         found.append(VULN_TYPES['hardcoded_secrets'])
-    if 'pickle.loads' in code_lower or 'yaml.load' in code_lower:
+    if 'pickle.loads' in code_lower or 'yaml.load(' in code_lower:
         found.append(VULN_TYPES['insecure_deserialization'])
     if re.search(r'open\s*\(.*\+', code):
         found.append(VULN_TYPES['path_traversal'])
@@ -153,17 +151,15 @@ def detect_vulnerability_types(code: str) -> list[str]:
     return found
 
 
-def parse_diff(diff_content: str) -> str:
-    """Extrae líneas agregadas (+) de un diff de git."""
+def parse_diff(diff_content):
     added_lines = []
     for line in diff_content.split('\n'):
         if line.startswith('+') and not line.startswith('+++'):
-            added_lines.append(line[1:])  # Quitar el '+'
+            added_lines.append(line[1:])
     return '\n'.join(added_lines)
 
 
-def classify(code: str) -> dict:
-    """Clasifica un fragmento de código como SEGURO o VULNERABLE."""
+def classify(code):
     try:
         import joblib
         model = joblib.load(MODEL_PATH)
@@ -171,7 +167,7 @@ def classify(code: str) -> dict:
             meta = json.load(f)
         feature_names = meta['feature_names']
     except FileNotFoundError:
-        print("[ERROR] Modelo no encontrado. Ejecuta el notebook de entrenamiento primero.", file=sys.stderr)
+        print("[ERROR] Modelo no encontrado. Ejecuta model/train.py primero.", file=sys.stderr)
         sys.exit(1)
 
     features = extract_features(code)
@@ -202,8 +198,7 @@ def classify(code: str) -> dict:
     }
 
 
-def format_pr_comment(result: dict) -> str:
-    """Genera el comentario para el PR de GitHub."""
+def format_pr_comment(result):
     emoji = '🔴' if result['is_vulnerable'] else '🟢'
     label = result['prediction']
     prob = result['vulnerability_probability']
@@ -234,29 +229,28 @@ def format_pr_comment(result: dict) -> str:
             "### 🔧 Acción Requerida",
             "Este PR ha sido **bloqueado automáticamente**. Por favor:",
             "1. Revisa el código en busca de las vulnerabilidades listadas arriba",
-            "2. Aplica los parches necesarios (usar parámetros preparados, sanitización, variables de entorno, etc.)",
+            "2. Aplica los parches necesarios",
             "3. Abre un nuevo PR con el código corregido",
             "",
-            "> *Análisis realizado por el modelo de detección de vulnerabilidades (Random Forest)*",
+            "> *Análisis realizado por el modelo Random Forest (Minería de Datos)*",
         ])
     else:
         lines.extend([
             "### ✅ El código pasó el análisis de seguridad",
             "El pipeline continuará automáticamente con las pruebas unitarias.",
             "",
-            "> *Análisis realizado por el modelo de detección de vulnerabilidades (Random Forest)*",
+            "> *Análisis realizado por el modelo Random Forest (Minería de Datos)*",
         ])
 
     return '\n'.join(lines)
 
 
-def format_telegram_message(result: dict, pr_info: dict = None) -> str:
-    """Genera el mensaje de Telegram."""
+def format_telegram_message(result, pr_info=None):
     emoji = '🔴 VULNERABLE' if result['is_vulnerable'] else '🟢 SEGURO'
     prob = result['vulnerability_probability']
 
     lines = [
-        f"*🔍 Análisis de Seguridad — Pipeline CI/CD*",
+        f"*Análisis de Seguridad — Pipeline CI/CD*",
         f"",
         f"*Resultado:* {emoji}",
         f"*Confianza:* {result['confidence']:.1%}",
@@ -272,23 +266,20 @@ def format_telegram_message(result: dict, pr_info: dict = None) -> str:
         ])
 
     if result['is_vulnerable'] and result['vulnerability_types']:
-        lines.extend([
-            f"",
-            f"*Vulnerabilidades detectadas:*",
-        ])
+        lines.extend([f"", f"*Vulnerabilidades detectadas:*"])
         for vt in result['vulnerability_types']:
             lines.append(f"  • {vt}")
         lines.append(f"")
-        lines.append(f"⛔ *El merge ha sido bloqueado. Se requiere corrección.*")
+        lines.append(f"El merge ha sido bloqueado. Se requiere corrección.")
     else:
         lines.append(f"")
-        lines.append(f"✅ *El código continuará al siguiente stage del pipeline.*")
+        lines.append(f"El código continuará al siguiente stage del pipeline.")
 
     return '\n'.join(lines)
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Clasificador de vulnerabilidades en código')
+    parser = argparse.ArgumentParser(description='Clasificador de vulnerabilidades')
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--diff', help='Archivo .diff del PR')
     group.add_argument('--code', help='Código fuente como string')
@@ -300,7 +291,6 @@ def main():
     parser.add_argument('--pr-author', default='')
     args = parser.parse_args()
 
-    # Cargar código
     if args.diff:
         with open(args.diff) as f:
             diff_content = f.read()
@@ -332,7 +322,6 @@ def main():
         }
         print(format_telegram_message(result, pr_info))
 
-    # Exit code: 1 si es vulnerable (para que el job falle)
     sys.exit(1 if result['is_vulnerable'] else 0)
 
 
