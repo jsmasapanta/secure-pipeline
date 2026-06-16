@@ -1,0 +1,381 @@
+name: 🔐 Secure CI/CD Pipeline
+
+on:
+  pull_request:
+    branches:
+      - test
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+
+  # ═══════════════════════════════════════════════════════════════════
+  # ETAPA 1: ANÁLISIS DE SEGURIDAD CON MODELO DE MINERÍA DE DATOS
+  # ═══════════════════════════════════════════════════════════════════
+  security-scan:
+    name: "🔍 Etapa 1 — Análisis de Vulnerabilidades (ML)"
+    runs-on: ubuntu-latest
+    outputs:
+      is_vulnerable: ${{ steps.classify.outputs.is_vulnerable }}
+      vuln_probability: ${{ steps.classify.outputs.vuln_probability }}
+      prediction: ${{ steps.classify.outputs.prediction }}
+
+    steps:
+      - name: "📥 Checkout del repositorio"
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: "🐍 Configurar Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: "📦 Instalar dependencias del modelo"
+        run: |
+          pip install scikit-learn xgboost numpy joblib
+
+      - name: "📨 Notificación Telegram — Inicio de análisis"
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          MESSAGE="🔍 *Inicio de Análisis de Seguridad*%0A%0A*Repositorio:* \`${{ github.repository }}\`%0A*PR:* #${{ github.event.pull_request.number }} — ${{ github.event.pull_request.title }}%0A*Autor:* @${{ github.event.pull_request.user.login }}%0A*Rama:* \`${{ github.head_ref }}\` → \`${{ github.base_ref }}\`%0A%0A⏳ Ejecutando modelo de detección de vulnerabilidades..."
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d text="${MESSAGE}" \
+            -d parse_mode="Markdown"
+
+      - name: "🔄 Obtener diff del Pull Request"
+        run: |
+          git diff origin/${{ github.base_ref }}...HEAD > /tmp/pr.diff
+          echo "=== DIFF GENERADO ==="
+          wc -l /tmp/pr.diff
+          cat /tmp/pr.diff | head -100
+
+      - name: "🤖 Clasificar código con modelo ML"
+        id: classify
+        run: |
+          python model/classify.py --diff /tmp/pr.diff --output json > /tmp/result.json 2>/tmp/classify_stderr.txt
+          EXIT_CODE=$?
+          
+          echo "=== RESULTADO DEL MODELO ==="
+          cat /tmp/result.json
+          
+          IS_VULNERABLE=$(python -c "import json; r=json.load(open('/tmp/result.json')); print(str(r['is_vulnerable']).lower())")
+          PROBABILITY=$(python -c "import json; r=json.load(open('/tmp/result.json')); print(f\"{r['vulnerability_probability']:.4f}\")")
+          PREDICTION=$(python -c "import json; r=json.load(open('/tmp/result.json')); print(r['prediction'])")
+          
+          echo "is_vulnerable=${IS_VULNERABLE}" >> $GITHUB_OUTPUT
+          echo "vuln_probability=${PROBABILITY}" >> $GITHUB_OUTPUT
+          echo "prediction=${PREDICTION}" >> $GITHUB_OUTPUT
+          
+          echo "IS_VULNERABLE=${IS_VULNERABLE}" >> $GITHUB_ENV
+          echo "VULN_PROBABILITY=${PROBABILITY}" >> $GITHUB_ENV
+
+      - name: "💬 Publicar resultado en el PR"
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const result = JSON.parse(fs.readFileSync('/tmp/result.json', 'utf8'));
+            
+            const isVuln = result.is_vulnerable;
+            const prob = (result.vulnerability_probability * 100).toFixed(1);
+            const conf = (result.confidence * 100).toFixed(1);
+            const vulnTypes = result.vulnerability_types || [];
+            const features = result.features_summary || {};
+            
+            const statusEmoji = isVuln ? '🔴' : '🟢';
+            const statusText = isVuln ? 'VULNERABLE' : 'SEGURO';
+            
+            let body = `## ${statusEmoji} Análisis de Seguridad — Resultado: **${statusText}**\n\n`;
+            body += `> Análisis realizado por modelo **Random Forest** (Minería de Datos)\n\n`;
+            body += `| Métrica | Valor |\n|---|---|\n`;
+            body += `| 🎯 Predicción | \`${statusText}\` |\n`;
+            body += `| 📊 Probabilidad de vulnerabilidad | \`${prob}%\` |\n`;
+            body += `| 🔒 Confianza del modelo | \`${conf}%\` |\n`;
+            body += `| ⚠️ Funciones peligrosas | \`${features.dangerous_functions || 0}\` |\n`;
+            body += `| 🛡️ Sanitización presente | ${features.sanitization_present ? '`✅ Sí`' : '`❌ No`'} |\n`;
+            body += `| 🗄️ Patrones SQL Injection | \`${features.sql_injection_patterns || 0}\` |\n`;
+            body += `| 💻 Patrones Cmd Injection | \`${features.command_injection_patterns || 0}\` |\n`;
+            body += `| 🌐 Patrones XSS | \`${features.xss_patterns || 0}\` |\n`;
+            body += `| 🔑 Secretos hardcodeados | \`${features.hardcoded_secrets || 0}\` |\n\n`;
+            
+            if (isVuln) {
+              body += `### ⛔ Vulnerabilidades Detectadas\n\n`;
+              if (vulnTypes.length > 0) {
+                vulnTypes.forEach(v => { body += `- \`${v}\`\n`; });
+              } else {
+                body += `- Patrón de código inseguro detectado estadísticamente por el modelo\n`;
+              }
+              body += `\n### 🔧 Acciones Requeridas\n`;
+              body += `1. Revisar el código en busca de las vulnerabilidades listadas\n`;
+              body += `2. Aplicar correcciones (parámetros preparados, sanitización, variables de entorno)\n`;
+              body += `3. Abrir un nuevo PR con el código corregido\n\n`;
+              body += `> ⛔ **Este PR ha sido bloqueado automáticamente. El merge está deshabilitado.**`;
+            } else {
+              body += `### ✅ El código pasó la revisión de seguridad\n`;
+              body += `El pipeline continuará automáticamente con las pruebas unitarias e integración.`;
+            }
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });
+
+      - name: "🏷️ Etiquetar PR según resultado"
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const isVuln = '${{ steps.classify.outputs.is_vulnerable }}' === 'true';
+            const labelName = isVuln ? 'fixing-required' : 'security-approved';
+            const labelColor = isVuln ? 'ff0000' : '00ff00';
+            
+            // Crear label si no existe
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: labelName,
+                color: labelColor,
+              });
+            } catch(e) {}
+            
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: [labelName]
+            });
+
+      - name: "🐛 Crear Issue automática si hay vulnerabilidad"
+        if: steps.classify.outputs.is_vulnerable == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const result = JSON.parse(fs.readFileSync('/tmp/result.json', 'utf8'));
+            const vulnTypes = result.vulnerability_types || [];
+            
+            const issueBody = `## 🔴 Vulnerabilidad Detectada en PR #${{ github.event.pull_request.number }}
+            
+**PR:** [${{ github.event.pull_request.title }}](${{ github.event.pull_request.html_url }})
+**Autor:** @${{ github.event.pull_request.user.login }}
+**Rama:** \`${{ github.head_ref }}\`
+
+### Vulnerabilidades Detectadas
+${vulnTypes.map(v => `- ${v}`).join('\n') || '- Patrón inseguro detectado por el modelo ML'}
+
+### Estadísticas del Modelo
+- Probabilidad de vulnerabilidad: \`${(result.vulnerability_probability * 100).toFixed(1)}%\`
+- Funciones peligrosas: \`${result.features_summary?.dangerous_functions || 0}\`
+- Sanitización: \`${result.features_summary?.sanitization_present ? 'Presente' : 'Ausente'}\`
+
+### Acción Requerida
+Por favor corrige las vulnerabilidades y abre un nuevo PR.
+
+> *Issue creada automáticamente por el pipeline de seguridad CI/CD*`;
+            
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🔴 [SECURITY] Vulnerabilidad en PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}`,
+              body: issueBody,
+              labels: ['fixing-required', 'security', 'bug']
+            });
+
+      - name: "📨 Notificación Telegram — Resultado del análisis"
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          IS_VULN="${{ steps.classify.outputs.is_vulnerable }}"
+          PROB="${{ steps.classify.outputs.vuln_probability }}"
+          PROB_PCT=$(python -c "print(f'{float('${PROB}')*100:.1f}%')" 2>/dev/null || echo "${PROB}")
+          
+          if [ "$IS_VULN" = "true" ]; then
+            EMOJI="🔴"
+            STATUS="VULNERABLE — Merge bloqueado"
+          else
+            EMOJI="🟢"
+            STATUS="SEGURO — Continuando pipeline"
+          fi
+          
+          MESSAGE="${EMOJI} *Resultado del Análisis de Seguridad*%0A%0A*Estado:* ${STATUS}%0A*P(Vulnerable):* ${PROB_PCT}%0A%0A*PR:* #${{ github.event.pull_request.number }} — ${{ github.event.pull_request.title }}%0A*Autor:* @${{ github.event.pull_request.user.login }}%0A*Repo:* \`${{ github.repository }}\`"
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d text="${MESSAGE}" \
+            -d parse_mode="Markdown"
+
+      - name: "⛔ Bloquear pipeline si código es VULNERABLE"
+        if: steps.classify.outputs.is_vulnerable == 'true'
+        run: |
+          echo "::error::🔴 CÓDIGO VULNERABLE DETECTADO — Probability: ${{ steps.classify.outputs.vuln_probability }}"
+          echo "::error::El PR ha sido rechazado. Corrige las vulnerabilidades antes de hacer merge."
+          exit 1
+
+  # ═══════════════════════════════════════════════════════════════════
+  # ETAPA 2: MERGE A TEST + PRUEBAS
+  # ═══════════════════════════════════════════════════════════════════
+  run-tests:
+    name: "🧪 Etapa 2 — Pruebas Unitarias & Integración"
+    runs-on: ubuntu-latest
+    needs: security-scan
+    if: needs.security-scan.outputs.is_vulnerable == 'false'
+
+    steps:
+      - name: "📥 Checkout"
+        uses: actions/checkout@v4
+
+      - name: "🐍 Configurar Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: "📦 Instalar dependencias de la app"
+        run: |
+          pip install -r app/requirements.txt 2>/dev/null || echo "No requirements.txt found, installing defaults"
+          pip install pytest pytest-cov flask
+
+      - name: "📨 Notificación Telegram — Inicio de pruebas"
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          MESSAGE="🧪 *Inicio de Pruebas Unitarias*%0A%0A*PR:* #${{ github.event.pull_request.number }}%0A*Código pasó el análisis de seguridad ✅*%0A%0A⏳ Ejecutando suite de pruebas..."
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d text="${MESSAGE}" \
+            -d parse_mode="Markdown"
+
+      - name: "🧪 Ejecutar pruebas con pytest"
+        id: tests
+        run: |
+          cd app
+          python -m pytest tests/ -v --tb=short --cov=. --cov-report=term-missing 2>&1 | tee /tmp/test_output.txt
+          TEST_EXIT=$?
+          echo "test_exit=${TEST_EXIT}" >> $GITHUB_OUTPUT
+          exit $TEST_EXIT
+
+      - name: "📨 Notificación Telegram — Resultado de pruebas"
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ "${{ steps.tests.outcome }}" = "success" ]; then
+            EMOJI="✅"
+            STATUS="Todas las pruebas pasaron"
+          else
+            EMOJI="❌"
+            STATUS="Pruebas fallidas — Merge bloqueado"
+          fi
+          MESSAGE="${EMOJI} *Resultado de Pruebas*%0A%0A*Estado:* ${STATUS}%0A*PR:* #${{ github.event.pull_request.number }}%0A*Repo:* \`${{ github.repository }}\`"
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d text="${MESSAGE}" \
+            -d parse_mode="Markdown"
+
+      - name: "🏷️ Etiquetar PR si pruebas fallan"
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner, repo: context.repo.repo,
+                name: 'tests-failed', color: 'ff6600',
+              });
+            } catch(e) {}
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number, labels: ['tests-failed']
+            });
+
+  # ═══════════════════════════════════════════════════════════════════
+  # ETAPA 3: MERGE A MAIN + DESPLIEGUE EN PRODUCCIÓN
+  # ═══════════════════════════════════════════════════════════════════
+  deploy:
+    name: "🚀 Etapa 3 — Deploy a Producción"
+    runs-on: ubuntu-latest
+    needs: [security-scan, run-tests]
+    if: |
+      needs.security-scan.outputs.is_vulnerable == 'false' &&
+      needs.run-tests.result == 'success'
+
+    steps:
+      - name: "📥 Checkout"
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: "📨 Notificación Telegram — Iniciando deploy"
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          MESSAGE="🚀 *Iniciando Deploy a Producción*%0A%0A✅ Análisis de seguridad: APROBADO%0A✅ Pruebas unitarias: APROBADAS%0A%0A⏳ Desplegando en Render..."
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d text="${MESSAGE}" \
+            -d parse_mode="Markdown"
+
+      - name: "🐳 Build imagen Docker"
+        run: |
+          docker build -t secure-app:${{ github.sha }} ./app
+          docker tag secure-app:${{ github.sha }} secure-app:latest
+          echo "✅ Imagen Docker construida"
+
+      - name: "☁️ Deploy en Render (via Deploy Hook)"
+        id: deploy
+        env:
+          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          if [ -n "$RENDER_DEPLOY_HOOK" ]; then
+            RESPONSE=$(curl -s -X POST "$RENDER_DEPLOY_HOOK")
+            echo "Deploy response: $RESPONSE"
+            echo "deploy_url=${{ secrets.RENDER_APP_URL }}" >> $GITHUB_OUTPUT
+            echo "✅ Deploy iniciado en Render"
+          else
+            echo "⚠️  RENDER_DEPLOY_HOOK no configurado — saltando deploy real"
+            echo "deploy_url=https://tu-app.onrender.com" >> $GITHUB_OUTPUT
+          fi
+
+      - name: "📨 Notificación Telegram — Deploy exitoso"
+        if: success()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          APP_URL="${{ steps.deploy.outputs.deploy_url }}"
+          MESSAGE="🎉 *Deploy Exitoso a Producción*%0A%0A✅ Seguridad: APROBADA%0A✅ Pruebas: APROBADAS%0A✅ Deploy: COMPLETADO%0A%0A🌐 *App en producción:* ${APP_URL}%0A*PR:* #${{ github.event.pull_request.number }}%0A*Commit:* \`${{ github.sha }}\`"
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d text="${MESSAGE}" \
+            -d parse_mode="Markdown"
+
+      - name: "📨 Notificación Telegram — Deploy fallido"
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          MESSAGE="❌ *Deploy FALLIDO*%0A%0A*PR:* #${{ github.event.pull_request.number }}%0A*Repo:* \`${{ github.repository }}\`%0A%0ARevisa los logs en GitHub Actions."
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d text="${MESSAGE}" \
+            -d parse_mode="Markdown"
