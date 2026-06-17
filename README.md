@@ -1,255 +1,260 @@
-# 🔐 Secure CI/CD Pipeline con Detección de Vulnerabilidades por ML
+# Secure CI/CD Pipeline con Detección de Vulnerabilidades por ML
 
 **Universidad de las Fuerzas Armadas ESPE**  
+Departamento de Ciencias de la Computación — Ingeniería en Software  
 Desarrollo de Software Seguro — Proyecto Integrador Parcial II  
-Profesor: Geovanny Cudco
+Profesor: Geovanny Cudco  
+Estudiante: Jefferson Santiago Masapanta Guilcatoma  
 
 ---
 
-## 📋 Descripción
+## Descripción
 
-Pipeline CI/CD completamente automatizado que integra un modelo de **Random Forest** (minería de datos) para detectar vulnerabilidades en código fuente antes de que llegue a producción.
+Pipeline CI/CD completamente automatizado que integra un modelo de **Random Forest** (minería de datos tradicional) para detectar vulnerabilidades en código fuente antes de que llegue a producción.
 
-```
-dev branch → PR → [ML Security Scan] → [Unit Tests] → merge main → [Deploy Render]
-                         ↓                    ↓
-                  Telegram notify       Telegram notify
-```
+> **IMPORTANTE:** No se usa ningún LLM (GPT, Claude, Llama, etc.). El modelo es un clasificador tradicional entrenado con scikit-learn.
 
-## 🏗️ Arquitectura del Pipeline
+---
+
+## Flujo del Pipeline
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                   DEVELOPER (rama dev)                  │
-│                         git push                        │
-│                    Pull Request → test                  │
-└──────────────────────────┬──────────────────────────────┘
-                           │ Trigger automático
-                           ▼
-┌─────────────────────────────────────────────────────────┐
-│  ETAPA 1: Análisis de Seguridad (Random Forest)         │
-│  • Extrae diff del PR                                   │
-│  • Extrae features: AST, tokens, funciones peligrosas   │
-│  • Clasifica: SEGURO / VULNERABLE                       │
-│  • Si VULNERABLE → bloquea + Telegram + Issue           │
-└──────────────────────────┬──────────────────────────────┘
-                           │ Solo si SEGURO
-                           ▼
-┌─────────────────────────────────────────────────────────┐
-│  ETAPA 2: Pruebas Unitarias & Integración               │
-│  • pytest con cobertura de código                       │
-│  • Si fallan → bloquea + Telegram + label               │
-└──────────────────────────┬──────────────────────────────┘
-                           │ Solo si pasan
-                           ▼
-┌─────────────────────────────────────────────────────────┐
-│  ETAPA 3: Deploy a Producción                           │
-│  • Build imagen Docker                                  │
-│  • Deploy en Render via webhook                         │
-│  • Notificación Telegram de éxito                       │
-└─────────────────────────────────────────────────────────┘
+Developer (rama dev)
+        |
+        | git push + Pull Request dev → test
+        ↓
+┌─────────────────────────────────────────┐
+│  ETAPA 1: Análisis de Seguridad (ML)    │
+│  • Extrae diff del PR                   │
+│  • Extrae features del código           │
+│  • Random Forest clasifica: SEGURO/VULN │
+│  • Si VULNERABLE → bloquea + Telegram  │
+│                   + Issue automática    │
+└──────────────┬──────────────────────────┘
+               │ Solo si SEGURO
+               ↓
+┌─────────────────────────────────────────┐
+│  ETAPA 2: Pruebas Unitarias (pytest)    │
+│  • 20 pruebas unitarias e integración   │
+│  • Si fallan → bloquea + Telegram       │
+└──────────────┬──────────────────────────┘
+               │ Solo si pasan
+               ↓
+┌─────────────────────────────────────────┐
+│  ETAPA 3: Deploy a Producción           │
+│  • Deploy automático en Render          │
+│  • Notificación Telegram con URL        │
+└─────────────────────────────────────────┘
 ```
 
-## 🤖 Modelo de Machine Learning
+---
+
+## Modelo de Machine Learning
 
 ### Algoritmo
-**Random Forest Classifier** (scikit-learn) — clasificador tradicional de minería de datos.  
-> ⚠️ **NO se usa ningún LLM** (GPT, Claude, Llama, etc.)
+**Random Forest Classifier** — scikit-learn (NO es un LLM)
 
 ### Dataset
-Sintético basado en patrones del **Juliet Test Suite (NIST)** y **CVEFixes**, cubriendo:
-- CWE-89: SQL Injection
-- CWE-78: OS Command Injection  
-- CWE-79: Cross-Site Scripting (XSS)
-- CWE-798: Hardcoded Credentials
-- CWE-502: Insecure Deserialization
-- CWE-22: Path Traversal
-- CWE-95: eval/exec injection
+Sintético basado en patrones del **Juliet Test Suite (NIST)** y **CVEFixes**:
+- 240 muestras vulnerables
+- 240 muestras seguras
+- 480 muestras totales
 
-### Features extraídas
+### Vulnerabilidades cubiertas
+| CWE | Descripción |
+|-----|-------------|
+| CWE-89 | SQL Injection |
+| CWE-78 | OS Command Injection |
+| CWE-79 | Cross-Site Scripting (XSS) |
+| CWE-798 | Hardcoded Credentials |
+| CWE-502 | Insecure Deserialization |
+| CWE-22 | Path Traversal |
+| CWE-95 | eval/exec Injection |
+
+### Features extraídas (45 features)
 | Feature | Descripción |
 |---------|-------------|
 | `ast_depth` | Profundidad máxima del AST |
-| `dangerous_fn_count` | # de funciones peligrosas (eval, exec, os.system...) |
-| `sql_injection_patterns` | Patrones de concatenación en queries SQL |
-| `cmd_injection_patterns` | Llamadas a shell con input no sanitizado |
-| `xss_patterns` | Escritura directa en DOM sin escape |
-| `hardcoded_secrets` | Credenciales hardcodeadas en código |
-| `sanitization_count` | # de funciones de sanitización presentes |
+| `dangerous_fn_count` | Funciones peligrosas (eval, exec, os.system...) |
+| `sql_injection_patterns` | Concatenación en queries SQL |
+| `cmd_injection_patterns` | Llamadas a shell con input del usuario |
+| `xss_patterns` | Escritura directa en DOM |
+| `hardcoded_secrets` | Credenciales hardcodeadas |
+| `sanitization_count` | Funciones de sanitización presentes |
+| `uses_parameterized` | Uso de consultas parametrizadas |
+| `uses_orm` | Uso de ORM seguro |
+| `is_safe_sql` | SQL seguro detectado |
+| `uses_env_vars` | Secretos en variables de entorno |
 | `has_try_except` | Manejo de errores presente |
-| `uses_env_vars` | Uso de variables de entorno para secretos |
-| `danger_sanitize_ratio` | Ratio peligro/sanitización |
-| + 30 más... | Tokens, longitud, patrones de sanitización específicos |
 
 ### Resultados de Validación
 ```
-Modelo: Random Forest (200 estimadores)
-Accuracy CV (5-fold): ≥ 82%
-AUC-ROC: ≥ 0.90
-Dataset: ~800 muestras balanceadas
+Modelo:           Random Forest (100 estimadores)
+Accuracy CV:      100% (5-fold cross-validation)
+AUC-ROC:          1.0000
+Dataset:          480 muestras balanceadas
+Features:         45 features
 ```
 
-Ver el notebook completo: [`notebooks/train_model.ipynb`](notebooks/train_model.ipynb)
+---
 
-## 🚀 Setup del Pipeline
+## Setup del Pipeline
 
-### 1. Clonar y preparar el repositorio
+### 1. Clonar el repositorio
 
 ```bash
-git clone https://github.com/TU_USUARIO/secure-pipeline.git
+git clone https://github.com/jsmasapanta/secure-pipeline.git
 cd secure-pipeline
+```
 
-# Crear ramas requeridas
+### 2. Instalar dependencias
+
+```bash
+python -m venv venv
+venv\Scripts\activate  # Windows
+pip install scikit-learn xgboost pandas numpy joblib flask pytest pytest-cov
+```
+
+### 3. Entrenar el modelo
+
+```bash
+python model/train.py
+# Genera: model/vulnerability_model.pkl
+#         model/model_metadata.json
+```
+
+### 4. Probar el clasificador
+
+```bash
+# Código vulnerable
+python model/classify.py --code "sql = 'SELECT * FROM users WHERE id=' + uid; cursor.execute(sql)" --output json
+
+# Código seguro
+python model/classify.py --code "cursor.execute('SELECT * FROM users WHERE id = %s', (uid,))" --output json
+```
+
+### 5. GitHub Secrets requeridos
+
+| Secret | Descripción |
+|--------|-------------|
+| `TELEGRAM_BOT_TOKEN` | Token del bot de Telegram |
+| `TELEGRAM_CHAT_ID` | ID del chat para notificaciones |
+| `RENDER_DEPLOY_HOOK` | URL del deploy hook de Render |
+| `RENDER_APP_URL` | URL de la app en producción |
+
+### 6. Ramas requeridas
+
+```bash
 git checkout -b dev && git push origin dev
 git checkout -b test && git push origin test
 git checkout main && git push origin main
 ```
 
-### 2. Configurar GitHub Secrets
+### 7. Branch Protection Rules
 
-En `Settings → Secrets and variables → Actions`, agregar:
+**Rama `test`:**
+- Require status checks: `security-scan`
 
-| Secret | Descripción |
-|--------|-------------|
-| `TELEGRAM_BOT_TOKEN` | Token del bot de Telegram (BotFather) |
-| `TELEGRAM_CHAT_ID` | ID del chat/grupo para notificaciones |
-| `RENDER_DEPLOY_HOOK` | URL del deploy hook de Render |
-| `RENDER_APP_URL` | URL de tu app en Render |
+**Rama `main`:**
+- Require status checks: `security-scan`, `run-tests`
 
-### 3. Entrenar el modelo
+---
 
-```bash
-pip install scikit-learn xgboost pandas numpy matplotlib joblib
-jupyter notebook notebooks/train_model.ipynb
-# Ejecutar todas las celdas → genera model/vulnerability_model.pkl
-git add model/vulnerability_model.pkl model/model_metadata.json
-git commit -m "feat: add trained vulnerability detection model"
-git push
-```
+## Bot de Telegram
 
-### 4. Configurar Branch Protection Rules
+**Bot:** @secure_pipeline_espe_bot
 
-En GitHub → `Settings → Branches`:
-
-**Para rama `test`:**
-- ✅ Require status checks to pass: `security-scan`
-- ✅ Require branches to be up to date
-
-**Para rama `main`:**
-- ✅ Require status checks to pass: `security-scan`, `run-tests`
-- ✅ Require branches to be up to date
-- ✅ Restrict pushes (solo via PR)
-
-### 5. Configurar bot de Telegram
-
-```bash
-# 1. Hablar con @BotFather en Telegram
-# 2. /newbot → darle un nombre → obtener token
-# 3. Agregar el bot al grupo/chat
-# 4. Obtener el chat_id:
-curl "https://api.telegram.org/bot<TOKEN>/getUpdates"
-```
-
-## 🧪 Probar el Pipeline
-
-### Código VULNERABLE (debe ser rechazado)
-```python
-# vulnerable_code.py
-def login(username, password):
-    query = "SELECT * FROM users WHERE user='" + username + "' AND pwd='" + password + "'"
-    cursor.execute(query)  # SQL Injection!
-    return cursor.fetchone()
-
-def run_command(cmd):
-    os.system(cmd)  # Command Injection!
-```
-
-### Código SEGURO (debe pasar)
-```python
-# secure_code.py
-def login(username, password):
-    cursor.execute(
-        "SELECT * FROM users WHERE user = %s AND pwd = %s",
-        (username, hash_password(password))  # Parametrizado ✅
-    )
-    return cursor.fetchone()
-```
-
-### Flujo de prueba
-```bash
-git checkout dev
-# Agregar código vulnerable
-echo "cursor.execute('SELECT * FROM users WHERE id=' + user_id)" > test_vuln.py
-git add test_vuln.py && git commit -m "test: add vulnerable code"
-git push origin dev
-# Abrir PR: dev → test en GitHub
-# → El pipeline detectará la vulnerabilidad y bloqueará el merge
-```
-
-## 📱 Bot de Telegram
-
-El bot envía notificaciones en los siguientes eventos:
+Notificaciones automáticas en cada fase:
 
 | Evento | Mensaje |
 |--------|---------|
-| Inicio de análisis | 🔍 Análisis iniciado + datos del PR |
-| Resultado seguro | 🟢 SEGURO + probabilidad + confianza |
-| Resultado vulnerable | 🔴 VULNERABLE + tipos de vulnerabilidad |
-| Pruebas pasadas | ✅ Todas las pruebas aprobadas |
-| Pruebas fallidas | ❌ Tests fallidos + bloqueo |
-| Deploy exitoso | 🎉 URL de producción |
-| Deploy fallido | ❌ Error en producción |
+| Inicio de análisis | Inicio de Analisis de Seguridad - PR #N |
+| Resultado seguro | Resultado: SEGURO - Continuando pipeline |
+| Resultado vulnerable | Resultado: VULNERABLE - Merge bloqueado |
+| Pruebas iniciadas | Iniciando pruebas unitarias |
+| Pruebas pasadas | Resultado pruebas: Todas las pruebas pasaron |
+| Pruebas fallidas | Resultado pruebas: Pruebas fallidas |
+| Deploy iniciado | Iniciando deploy a produccion |
+| Deploy exitoso | Deploy exitoso en produccion - URL |
 
-**Capturas del bot:** *(agregar screenshots aquí)*
+---
 
-## 🌐 Despliegue en Producción
+## App en Producción
 
-App desplegada en **Render**: [https://tu-app.onrender.com](https://tu-app.onrender.com)
+**URL:** https://secure-pipeline.onrender.com
 
-```bash
-# Endpoints disponibles:
-GET  /           → Info de la app
-GET  /health     → Health check
-GET  /tasks      → Lista de tareas
-POST /tasks      → Crear tarea
-GET  /tasks/:id  → Obtener tarea
-PUT  /tasks/:id  → Actualizar tarea
-```
+### Endpoints disponibles
 
-## 📁 Estructura del Proyecto
+| Método | Endpoint | Descripción |
+|--------|----------|-------------|
+| GET | `/` | Info de la app |
+| GET | `/health` | Health check |
+| GET | `/tasks` | Lista de tareas |
+| POST | `/tasks` | Crear tarea |
+| GET | `/tasks/:id` | Obtener tarea |
+| PUT | `/tasks/:id` | Actualizar tarea |
+
+---
+
+## Estructura del Proyecto
 
 ```
 secure-pipeline/
 ├── .github/
 │   └── workflows/
-│       └── secure-pipeline.yml    # Pipeline completo CI/CD
+│       └── secure-pipeline.yml    # Pipeline CI/CD completo
 ├── model/
-│   ├── classify.py                # Script de clasificación ML
-│   ├── vulnerability_model.pkl    # Modelo entrenado (generado)
-│   └── model_metadata.json        # Metadatos del modelo (generado)
+│   ├── train.py                   # Entrenamiento del modelo
+│   ├── classify.py                # Clasificador de vulnerabilidades
+│   ├── vulnerability_model.pkl    # Modelo entrenado
+│   └── model_metadata.json        # Metadatos del modelo
 ├── notebooks/
 │   └── train_model.ipynb          # Notebook de entrenamiento
 ├── app/
-│   ├── app.py                     # Aplicación Flask
+│   ├── app.py                     # Aplicación Flask segura
 │   ├── Dockerfile                 # Imagen Docker
 │   ├── requirements.txt
 │   └── tests/
-│       └── test_app.py            # Suite de pruebas pytest
+│       └── test_app.py            # 20 pruebas unitarias
 └── README.md
 ```
 
-## 📊 Criterios de Evaluación
+---
+
+## Prueba del Pipeline
+
+### Código VULNERABLE (bloqueado)
+```python
+# login_vulnerable.py
+def login(username, password):
+    sql = "SELECT * FROM users WHERE user='" + username + "' AND pwd='" + password + "'"
+    cursor.execute(sql)  # SQL Injection detectado por el modelo
+```
+
+### Código SEGURO (pasa)
+```python
+# login_secure.py
+def login(username, password):
+    cursor.execute(
+        "SELECT * FROM users WHERE user = %s AND pwd = %s",
+        (username, hash_password(password))
+    )
+```
+
+---
+
+## Criterios de Evaluación
 
 | Criterio | Estado |
 |----------|--------|
-| Pipeline completamente automatizado | ✅ |
-| Modelo ML propio (sin LLM) | ✅ Random Forest |
-| Accuracy ≥ 82% en CV | ✅ |
-| Notificaciones Telegram en todas las fases | ✅ |
-| Issues automáticas al detectar vulnerabilidades | ✅ |
-| Despliegue automático funcional | ✅ Render |
-| Branch protection rules activas | ✅ |
-| Notebook de entrenamiento incluido | ✅ |
+| Pipeline completamente automatizado | Completado |
+| Modelo ML propio sin LLM | Completado - Random Forest |
+| Accuracy mayor a 82% en CV | Completado - 100% |
+| Notificaciones Telegram en todas las fases | Completado |
+| Issues automáticas al detectar vulnerabilidades | Completado |
+| Despliegue automático funcional | Completado - Render |
+| Branch protection rules activas | Completado |
+| Notebook de entrenamiento incluido | Completado |
 
 ---
 
