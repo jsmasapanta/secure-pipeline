@@ -1,7 +1,8 @@
 # 🔐 Secure CI/CD Pipeline con Detección de Vulnerabilidades por ML
 
 **Universidad de las Fuerzas Armadas ESPE**  
-Desarrollo de Software Seguro — Proyecto Integrador Parcial II  
+Desarrollo de Software Seguro — Proyecto Integrador Parcial II 
+Integrantes: Wilmer Buestan y Jefferson Masapanta
 Profesor: Geovanny Cudco
 
 ---
