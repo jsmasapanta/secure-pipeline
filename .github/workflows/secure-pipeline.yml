@@ -31,8 +31,9 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Instalar dependencias del modelo
-        run: pip install scikit-learn xgboost numpy joblib pandas
+      - name: "📦 Instalar dependencias del modelo"
+        run: |
+          pip install scikit-learn xgboost numpy joblib requests
 
       - name: Notificacion Telegram - Inicio de analisis
         env:
