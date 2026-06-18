@@ -9,4 +9,4 @@ def ejecutar_comando(user_input):
 def consulta_insegura(user_id):
     conn = sqlite3.connect("db.sqlite")
     query = "SELECT * FROM users WHERE id = " + user_id
-    conn.execute(query)
+    conn.execute(query) 
