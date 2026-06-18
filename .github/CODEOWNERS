@@ -1,0 +1,9 @@
+# CODEOWNERS — Protección de ramas críticas
+# Todo PR a 'test' o 'main' requiere revisión del propietario.
+# Configura "Require review from CODEOWNERS" en la branch protection de GitHub.
+
+* @WilmerBuestan
+
+# Pipeline de seguridad — cambios requieren revisión explícita
+.github/workflows/ @WilmerBuestan
+model/             @WilmerBuestan
