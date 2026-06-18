@@ -16,6 +16,8 @@ import json
 import argparse
 import numpy as np
 from pathlib import Path
+import requests # <-- Añadir al inicio del archivo
+import os
 
 MODEL_PATH = Path(__file__).parent / "vulnerability_model.pkl"
 METADATA_PATH = Path(__file__).parent / "model_metadata.json"
@@ -278,6 +280,29 @@ def format_telegram_message(result, pr_info=None):
     return '\n'.join(lines)
 
 
+def send_telegram_alert(message_text):
+    import os
+    import requests
+    
+    bot_token = os.environ.get('TELEGRAM_BOT_TOKEN')
+    chat_id = os.environ.get('TELEGRAM_CHAT_ID')
+    
+    if not bot_token or not chat_id:
+        print("[AVISO] Credenciales de Telegram no configuradas en variables de entorno.")
+        return
+
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": message_text,
+        "parse_mode": "Markdown"
+    }
+    try:
+        requests.post(url, json=payload)
+    except Exception as e:
+        print(f"[ERROR] enviando Telegram: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Clasificador de vulnerabilidades')
     group = parser.add_mutually_exclusive_group(required=True)
@@ -320,7 +345,9 @@ def main():
             'pr_title': args.pr_title,
             'author': args.pr_author,
         }
-        print(format_telegram_message(result, pr_info))
+        mensaje = format_telegram_message(result, pr_info)
+        print(mensaje) # Se imprime en la consola para los logs de GitHub
+        send_telegram_alert(mensaje) # Hace la petición HTTP real a Telegram
 
     sys.exit(1 if result['is_vulnerable'] else 0)
 
