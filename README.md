@@ -8,6 +8,8 @@ Profesor: Geovanny Cudco
 
 ## 📋 Descripción
 
+
+
 Pipeline CI/CD completamente automatizado que integra un modelo de **Random Forest** (minería de datos) para detectar vulnerabilidades en código fuente antes de que llegue a producción.
 
 ```
