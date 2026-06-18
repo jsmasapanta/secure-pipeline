@@ -47,7 +47,12 @@ jobs:
 
       - name: Obtener diff del Pull Request
         run: |
+          # Obtenemos el diff normal
           git diff origin/${{ github.base_ref }}...HEAD > /tmp/pr.diff
+          # FORZAMOS que el archivo de prueba se analice siempre agregándolo al diff
+          if [ -f app/archivo_inseguro.py ]; then
+            cat app/archivo_inseguro.py >> /tmp/pr.diff
+          fi
           cat /tmp/pr.diff
 
       - name: Clasificar codigo con modelo ML
