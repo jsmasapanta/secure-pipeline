@@ -58,7 +58,8 @@ jobs:
       - name: Clasificar codigo con modelo ML
         id: classify
         run: |
-          python model/classify.py --diff /tmp/pr.diff --output json > /tmp/result.json || true
+          # Analizamos el archivo específico en lugar del diff
+          python model/classify.py --file app/archivo_inseguro.py --output json > /tmp/result.json
           cat /tmp/result.json
           IS_VULNERABLE=$(python -c "import json; r=json.load(open('/tmp/result.json')); print(str(r['is_vulnerable']).lower())")
           PROBABILITY=$(python -c "import json; r=json.load(open('/tmp/result.json')); print(r['vulnerability_probability'])")
