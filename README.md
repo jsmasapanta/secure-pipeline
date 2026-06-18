@@ -255,3 +255,4 @@ secure-pipeline/
 
 *Proyecto Integrador Parcial II — Desarrollo de Software Seguro*  
 *Universidad de las Fuerzas Armadas ESPE — 2026*
+ 
