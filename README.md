@@ -327,5 +327,9 @@ PUT  /tasks/:id  → Actualizar { "title": "...", "done": true }
 ---
 
 *Proyecto Integrador Parcial II — Desarrollo de Software Seguro*
+
+
 *Universidad de las Fuerzas Armadas ESPE — Junio 2026*
+
+
 *Profesor: Geovanny Cudco*
